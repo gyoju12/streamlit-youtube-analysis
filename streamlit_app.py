@@ -83,6 +83,68 @@ def humanize_count(count_str: str) -> str:
     return f"{n:,}"
 
 
+def _ensure_session_keys():
+    for k, v in {
+        "oauth_state": None,
+        "code_verifier": None,
+        "user": None,
+        "access_token": None,
+        "id_token": None,
+    }.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+def render_auth_sidebar() -> bool:
+    """사이드바에 임시 로그인/로그아웃 UI를 렌더링하고, 로그인 여부를 반환합니다.
+    자격 증명은 st.secrets 또는 환경변수(TEMP_USERNAME, TEMP_PASSWORD)에서만 읽습니다.
+    코드에 하드코딩된 기본값은 없습니다.
+    """
+    _ensure_session_keys()
+    st.sidebar.subheader("인증")
+
+    # 이미 로그인된 경우
+    if st.session_state.get("user"):
+        user = st.session_state["user"]
+        st.sidebar.success(f"로그인: {user.get('name', user.get('username', 'user'))}")
+        if st.sidebar.button("로그아웃"):
+            for k in ["user", "access_token", "id_token", "oauth_state", "code_verifier"]:
+                st.session_state[k] = None
+            st.rerun()
+        return True
+
+    # 로그인 폼
+    with st.sidebar.form("login_form", clear_on_submit=False):
+        username = st.text_input("아이디", value="")
+        password = st.text_input("비밀번호", type="password", value="")
+        submitted = st.form_submit_button("로그인")
+
+    if submitted:
+        # st.secrets 우선, env 폴백
+        expected_user = None
+        expected_pass = None
+        try:
+            if hasattr(st, "secrets") and st.secrets:
+                expected_user = st.secrets.get("TEMP_USERNAME", expected_user)
+                expected_pass = st.secrets.get("TEMP_PASSWORD", expected_pass)
+        except Exception:
+            pass
+        if expected_user is None:
+            expected_user = os.getenv("TEMP_USERNAME")
+        if expected_pass is None:
+            expected_pass = os.getenv("TEMP_PASSWORD")
+
+        if not expected_user or not expected_pass:
+            st.sidebar.warning("로그인 자격 증명이 설정되지 않았습니다. TEMP_USERNAME/PASSWORD를 secrets 또는 .env에 설정하세요.")
+            return False
+        if username == expected_user and password == expected_pass:
+            st.session_state["user"] = {"username": username, "name": "관리자"}
+            st.success("로그인 성공")
+            st.rerun()
+        else:
+            st.sidebar.error("아이디 또는 비밀번호가 올바르지 않습니다.")
+    return bool(st.session_state.get("user"))
+
+
 def fetch_popular_videos(
     api_key: str,
     max_results: int = 30,
@@ -228,6 +290,9 @@ def main() -> None:
     st.title("📺 YouTube 인기 동영상")
     st.caption("지역 선택 가능 | 표시 개수 조절 | 5분 캐시 | 새로고침으로 최신화")
 
+    # 사이드바: 인증 섹션 (임시 로그인)
+    is_authed = render_auth_sidebar()
+
     # 사이드바 컨트롤
     st.sidebar.header("옵션")
     common_regions = [
@@ -259,6 +324,9 @@ def main() -> None:
 
     try:
         api_key = get_api_key()
+        if not is_authed:
+            st.info("로그인 후 인기 동영상을 확인할 수 있습니다.")
+            return
         if refresh:
             # 캐시 초기화 (동영상/채널 구독자 모두)
             get_videos_cached.clear()
